@@ -401,6 +401,14 @@ def kernel_fn(data, state):
                                   H=H, I=I, BR=32, KC=128, CP=CP, S=S, num_warps=4, num_stages=1)
         _k2b[(M,)](y_part, ids, gwt, state["post_norm_w"], out, start, count, M8,
                    H=H, S=S, EPS=POST_NORM_EPS, num_warps=8)
+        if not torch.cuda.is_current_stream_capturing():
+            torch.cuda.synchronize()
+            print("DBG counts:", counts.tolist())
+            print("DBG list0:", list_ws[0, :8].tolist(), "row_fin:",
+                  [[int(torch.isfinite(h_part[s, f]).all()) for f in range(min(4, M8))] for s in range(S)])
+            print("DBG inter_fin:", int(torch.isfinite(inter).sum()), "/", inter.numel(),
+                  "| yp_fin:", int(torch.isfinite(y_part).sum()), "/", y_part.numel())
+            print("DBG out[0,:4]:", out[0, :4].tolist(), "out_fin:", int(torch.isfinite(out).all()))
     else:
         _k1[(count, triton.cdiv(I, BR))](x, list_ws, counts, state["w13T"], state["w13_sfT"],
                                          state["lut"], state["w13_gs"], inter, M8, start, M8,
