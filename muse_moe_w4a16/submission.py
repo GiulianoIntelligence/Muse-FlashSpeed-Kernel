@@ -163,6 +163,114 @@ def _k2(in_ptr, list_ptr, counts_ptr, wt_ptr, sft_ptr, gs_ptr, out_ptr,
 
 
 @triton.jit
+def _gv1(x_ptr, list_ptr, counts_ptr, wt_ptr, sft_ptr, gs_ptr, out_ptr,
+         M8, start, stride_l,
+         H: tl.constexpr, I: tl.constexpr, RP: tl.constexpr, KC: tl.constexpr,
+         RPAD: tl.constexpr):
+    """Dot-free GEMV for few routes: inter[ent, j] = silu(x@gate[j]) * (x@up[j]).
+
+    Route dim padded to RPAD registers and accumulated across k-chunks; weight words
+    [KCH, RP/4] unpack to [KCH, RP]; no tl.dot so loads coalesce freely."""
+    e = tl.program_id(0)
+    c = tl.load(counts_ptr + e)
+    if c == 0:
+        return
+    gid64 = (start + e).to(tl.int64)
+    gs = tl.load(gs_ptr + gid64)
+    wbase = gid64 * (H // 2) * (2 * I // 4)
+    sbase = gid64 * (H // 16) * (2 * I)
+    j4 = tl.program_id(1) * (RP // 4) + tl.arange(0, RP // 4)
+    jv = tl.reshape(4 * j4[:, None] + tl.arange(0, 4)[None, :], (RP,))
+    jm = jv < I
+    jm4 = (4 * j4) < I
+    r8 = tl.arange(0, RPAD)
+    ents = tl.load(list_ptr + e * stride_l + r8, mask=r8 < c, other=0)
+    toks = ents // 8
+    accg = tl.zeros((RPAD, RP), tl.float32)
+    accu = tl.zeros((RPAD, RP), tl.float32)
+    for k0 in tl.range(0, H, KC):
+        kb = k0 // 2 + tl.arange(0, KC // 2)
+        kb8 = k0 // 16 + tl.arange(0, KC // 16)
+        xev = tl.load(x_ptr + toks[:, None] * H + (2 * kb)[None, :],
+                      mask=(r8 < c)[:, None], other=0.0).to(tl.float32)
+        xod = tl.load(x_ptr + toks[:, None] * H + (2 * kb + 1)[None, :],
+                      mask=(r8 < c)[:, None], other=0.0).to(tl.float32)
+        bw = tl.load(wt_ptr + wbase + kb[:, None] * (2 * I // 4) + j4[None, :],
+                     mask=jm4[None, :], other=0)
+        bg = tl.reshape(_word_bytes(bw), (KC // 2, RP))
+        sw = tl.load(sft_ptr + sbase + kb8[:, None] * (2 * I) + jv[None, :],
+                     mask=jm[None, :], other=0.0)
+        sc = tl.reshape(tl.broadcast_to(sw[:, None, :], (KC // 16, 8, RP)),
+                        (KC // 2, RP)).to(tl.float32) * gs
+        wg_lo = (_e2m1(bg & 0xF) * sc).to(tl.float32)
+        wg_hi = (_e2m1(bg >> 4) * sc).to(tl.float32)
+        accg += tl.sum(xev[:, :, None] * wg_lo[None, :, :], 1)
+        accg += tl.sum(xod[:, :, None] * wg_hi[None, :, :], 1)
+        bwu = tl.load(wt_ptr + wbase + kb[:, None] * (2 * I // 4) + (I // 4 + j4)[None, :],
+                      mask=jm4[None, :], other=0)
+        bu = tl.reshape(_word_bytes(bwu), (KC // 2, RP))
+        swu = tl.load(sft_ptr + sbase + kb8[:, None] * (2 * I) + (I + jv)[None, :],
+                      mask=jm[None, :], other=0.0)
+        scu = tl.reshape(tl.broadcast_to(swu[:, None, :], (KC // 16, 8, RP)),
+                         (KC // 2, RP)).to(tl.float32) * gs
+        wu_lo = (_e2m1(bu & 0xF) * scu).to(tl.float32)
+        wu_hi = (_e2m1(bu >> 4) * scu).to(tl.float32)
+        accu += tl.sum(xev[:, :, None] * wu_lo[None, :, :], 1)
+        accu += tl.sum(xod[:, :, None] * wu_hi[None, :, :], 1)
+    for r in tl.range(0, c):
+        dg = tl.sum(tl.where((r8 == r)[:, None], accg, 0.0), 0)
+        du = tl.sum(tl.where((r8 == r)[:, None], accu, 0.0), 0)
+        inter = dg * tl.sigmoid(dg) * du
+        ent = tl.sum(tl.where(r8 == r, ents, 0))
+        tl.store(out_ptr + ent * I + jv, inter.to(out_ptr.dtype.element_ty), mask=jm)
+
+
+@triton.jit
+def _gv2(in_ptr, list_ptr, counts_ptr, wt_ptr, sft_ptr, gs_ptr, out_ptr,
+         start, stride_l,
+         H: tl.constexpr, I: tl.constexpr, RP: tl.constexpr, KC: tl.constexpr,
+         RPAD: tl.constexpr):
+    """Dot-free GEMV for few routes: y[ent, r] = inter @ dequant(w2[e])^T."""
+    e = tl.program_id(0)
+    c = tl.load(counts_ptr + e)
+    if c == 0:
+        return
+    gid64 = (start + e).to(tl.int64)
+    gs = tl.load(gs_ptr + gid64)
+    wbase = gid64 * (I // 2) * (H // 4)
+    sbase = gid64 * (I // 16) * H
+    r4 = tl.program_id(1) * (RP // 4) + tl.arange(0, RP // 4)
+    rv = tl.reshape(4 * r4[:, None] + tl.arange(0, 4)[None, :], (RP,))
+    rm = rv < H
+    rm4 = (4 * r4) < H
+    r8 = tl.arange(0, RPAD)
+    ents = tl.load(list_ptr + e * stride_l + r8, mask=r8 < c, other=0)
+    acc = tl.zeros((RPAD, RP), tl.float32)
+    for k0 in tl.range(0, I, KC):
+        kb = k0 // 2 + tl.arange(0, KC // 2)
+        kb8 = k0 // 16 + tl.arange(0, KC // 16)
+        aev = tl.load(in_ptr + ents[:, None] * I + (2 * kb)[None, :],
+                      mask=(r8 < c)[:, None], other=0.0).to(tl.float32)
+        aod = tl.load(in_ptr + ents[:, None] * I + (2 * kb + 1)[None, :],
+                      mask=(r8 < c)[:, None], other=0.0).to(tl.float32)
+        bw = tl.load(wt_ptr + wbase + kb[:, None] * (H // 4) + r4[None, :],
+                     mask=rm4[None, :], other=0)
+        b = tl.reshape(_word_bytes(bw), (KC // 2, RP))
+        sw = tl.load(sft_ptr + sbase + kb8[:, None] * H + rv[None, :],
+                     mask=rm[None, :], other=0.0)
+        sc = tl.reshape(tl.broadcast_to(sw[:, None, :], (KC // 16, 8, RP)),
+                        (KC // 2, RP)).to(tl.float32) * gs
+        w_lo = (_e2m1(b & 0xF) * sc).to(tl.float32)
+        w_hi = (_e2m1(b >> 4) * sc).to(tl.float32)
+        acc += tl.sum(aev[:, :, None] * w_lo[None, :, :], 1)
+        acc += tl.sum(aod[:, :, None] * w_hi[None, :, :], 1)
+    for ri in tl.range(0, c):
+        a = tl.sum(tl.where((r8 == ri)[:, None], acc, 0.0), 0)
+        ent = tl.sum(tl.where(r8 == ri, ents, 0))
+        tl.store(out_ptr + ent * H + rv, a.to(out_ptr.dtype.element_ty), mask=rm)
+
+
+@triton.jit
 def _k3(y_ptr, ids_ptr, gw_ptr, nw_ptr, out_ptr, start, count,
         H: tl.constexpr, EPS: tl.constexpr):
     """out[t] = sum over local routes of topk_weight * rmsnorm(y * (1 + post_norm_w))."""
@@ -220,12 +328,21 @@ def kernel_fn(data, state):
     y = torch.empty((M8, H), dtype=x.dtype, device=dev)
     out = torch.empty((M, H), dtype=x.dtype, device=dev)
 
-    _k1[(count, triton.cdiv(I, 32))](x, list_ws, counts, state["w13T"], state["w13_sfT"],
-                                     state["w13_gs"], inter, M8, start, M8,
-                                     H=H, I=I, BR=32, KC=128, CP=CP, num_warps=8, num_stages=2)
-    _k2[(count, triton.cdiv(H, 32))](inter, list_ws, counts, state["w2T"], state["w2_sfT"],
-                                     state["w2_gs"], y, start, M8,
-                                     H=H, I=I, BR=32, KC=128, CP=CP, num_warps=8, num_stages=2)
+    if M <= 8:
+        RPAD = min(max(triton.next_power_of_2(M), 1), 8)
+        _gv1[(count, I // 16)](x, list_ws, counts, state["w13T"], state["w13_sfT"],
+                               state["w13_gs"], inter, M8, start, M8,
+                               H=H, I=I, RP=16, KC=128, RPAD=RPAD, num_warps=4, num_stages=2)
+        _gv2[(count, H // 16)](inter, list_ws, counts, state["w2T"], state["w2_sfT"],
+                               state["w2_gs"], y, start, M8,
+                               H=H, I=I, RP=16, KC=128, RPAD=RPAD, num_warps=4, num_stages=2)
+    else:
+        _k1[(count, triton.cdiv(I, 32))](x, list_ws, counts, state["w13T"], state["w13_sfT"],
+                                         state["w13_gs"], inter, M8, start, M8,
+                                         H=H, I=I, BR=32, KC=128, CP=CP, num_warps=8, num_stages=2)
+        _k2[(count, triton.cdiv(H, 32))](inter, list_ws, counts, state["w2T"], state["w2_sfT"],
+                                         state["w2_gs"], y, start, M8,
+                                         H=H, I=I, BR=32, KC=128, CP=CP, num_warps=8, num_stages=2)
     _k3[(M,)](y, ids, gwt, state["post_norm_w"], out, start, count,
               H=H, EPS=POST_NORM_EPS, num_warps=8)
     return out
