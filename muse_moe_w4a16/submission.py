@@ -394,11 +394,11 @@ def kernel_fn(data, state):
         y_part = torch.empty((S, M8, H), dtype=torch.float32, device=dev)
         _k1s[(count, I // 32, S)](x, list_ws, counts, state["w13T"], state["w13_sfT"],
                                   state["lut"], state["w13_gs"], h_part, M8, start, M8,
-                                  H=H, I=I, BR=32, KC=128, CP=CP, S=S, num_warps=8, num_stages=2)
+                                  H=H, I=I, BR=32, KC=128, CP=CP, S=S, num_warps=4, num_stages=1)
         _k1b[(M8,)](h_part, inter, M8, I=I, S=S, num_warps=8)
         _k2s[(count, H // 32, S)](inter, list_ws, counts, state["w2T"], state["w2_sfT"],
                                   state["lut"], state["w2_gs"], y_part, M8, start, M8,
-                                  H=H, I=I, BR=32, KC=128, CP=CP, S=S, num_warps=8, num_stages=2)
+                                  H=H, I=I, BR=32, KC=128, CP=CP, S=S, num_warps=4, num_stages=1)
         _k2b[(M,)](y_part, ids, gwt, state["post_norm_w"], out, start, count, M8,
                    H=H, S=S, EPS=POST_NORM_EPS, num_warps=8)
     else:
