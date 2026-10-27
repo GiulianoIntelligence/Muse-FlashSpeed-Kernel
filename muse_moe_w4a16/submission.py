@@ -234,9 +234,9 @@ def kernel_fn(data, state):
     elif M <= 8:
         BR, KC, nw, ns = 32, 128, 4, 3
     elif M <= 16:
-        BR, KC, nw, ns = 128, 64, 8, 2
+        BR, KC, nw, ns = 64, 128, 8, 2
     elif M <= 40:
-        BR, KC, nw, ns = 64, 128, 8, 4
+        BR, KC, nw, ns = 64, 64, 8, 4
     elif M <= 128:
         BR, KC, nw, ns = 64, 128, 8, 4
     else:
