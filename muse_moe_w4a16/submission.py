@@ -403,12 +403,31 @@ def kernel_fn(data, state):
                    H=H, S=S, EPS=POST_NORM_EPS, num_warps=8)
         if not torch.cuda.is_current_stream_capturing():
             torch.cuda.synchronize()
-            print("DBG counts:", counts.tolist())
-            print("DBG list0:", list_ws[0, :8].tolist(), "row_fin:",
-                  [[int(torch.isfinite(h_part[s, f]).all()) for f in range(min(4, M8))] for s in range(S)])
-            print("DBG inter_fin:", int(torch.isfinite(inter).sum()), "/", inter.numel(),
-                  "| yp_fin:", int(torch.isfinite(y_part).sum()), "/", y_part.numel())
-            print("DBG out[0,:4]:", out[0, :4].tolist(), "out_fin:", int(torch.isfinite(out).all()))
+            ids32 = ids.to(torch.int32)
+            lok = (ids32.view(-1) >= start) & (ids32.view(-1) < start + count)
+            f0 = int(lok.nonzero()[0])
+            e0 = int(ids32.view(-1)[f0])
+            c0 = int(counts[e0 - start])
+            inter2 = torch.empty_like(inter)
+            y2 = torch.empty_like(y)
+            out2 = torch.empty_like(out)
+            _k1[(count, triton.cdiv(I, 32))](x, list_ws, counts, state["w13T"], state["w13_sfT"],
+                                             state["lut"], state["w13_gs"], inter2, M8, start, M8,
+                                             H=H, I=I, BR=32, KC=128, CP=16, num_warps=8, num_stages=2)
+            _k2[(count, triton.cdiv(H, 32))](inter2, list_ws, counts, state["w2T"], state["w2_sfT"],
+                                             state["lut"], state["w2_gs"], y2, start, M8,
+                                             H=H, I=I, BR=32, KC=128, CP=16, num_warps=8, num_stages=2)
+            _k3[(M,)](y2, ids, gwt, state["post_norm_w"], out2, start, count, H=H, EPS=POST_NORM_EPS, num_warps=8)
+            torch.cuda.synchronize()
+            print("DBG f0:", f0, "e0:", e0, "c0:", c0, "counts-sum:", int(counts.sum()))
+            print("DBG inter split vs full @f0:", inter[f0, :4].tolist(), inter2[f0, :4].tolist())
+            print("DBG inter maxdiff:", float((inter - inter2).abs().max()),
+                  "| y maxdiff:", float((y - y2).abs().max()),
+                  "| out maxdiff:", float((out - out2).abs().max()))
+            print("DBG hp[0,f0,:4]:", h_part[0, f0, :4].tolist(),
+                  "hp[1,f0,:4]:", h_part[1, f0, :4].tolist(),
+                  "hp[2,f0,:4]:", h_part[2, f0, :4].tolist(),
+                  "hp[3,f0,:4]:", h_part[3, f0, :4].tolist())
     else:
         _k1[(count, triton.cdiv(I, BR))](x, list_ws, counts, state["w13T"], state["w13_sfT"],
                                          state["lut"], state["w13_gs"], inter, M8, start, M8,
