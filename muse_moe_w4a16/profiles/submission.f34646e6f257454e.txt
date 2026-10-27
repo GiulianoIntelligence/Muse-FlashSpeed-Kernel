@@ -1,0 +1,65 @@
+okc run f34646e6f257454e on muse_moe_w4a16
+submission  /workspace/Muse-FlashSpeed-Kernel/muse_moe_w4a16/submission.py
+status      ok
+passed      true
+speedup     0.2127064496964882
+speedup_ci  [0.20951585295104086 0.2158970464419355]
+score_us    63225.63335145562
+tests       5/5 passed
+
+scored shapes (µs; speed of light is the reference's bound)
+case                                                         sglang      yours  speedup        sol  
+bs=1 load=decode 1 sharding=ep8                               79.74     253.12   0.315x      11.42  
+bs=16 load=decode 16 sharding=ep8                            189.46     942.97   0.201x      52.52  
+bs=32 load=decode 32 sharding=ep8                            204.96    1100.29   0.186x      70.76  
+bs=8 load=verify 1 sharding=ep8                              140.77     681.40   0.207x      37.32  
+bs=128 load=verify 16 sharding=ep8                           467.76    2578.55   0.181x     101.34  
+bs=256 load=verify 32 sharding=ep8                           630.83    3009.77   0.210x     108.94  
+
+profile 0: bs=1 load=decode 1 sharding=ep8
+kernel                                                           GPU time  share  calls
+_k1                                                              113.2 µs  53.4%      1
+_k2                                                               91.6 µs  43.2%      1
+_k3                                                                5.9 µs   2.8%      1
+_route_prep                                                        1.1 µs   0.5%      1
+total                                                            211.8 µs
+
+profile 1: bs=16 load=decode 16 sharding=ep8
+kernel                                                           GPU time  share  calls
+_k1                                                              776.7 µs  65.0%      1
+_k2                                                              410.9 µs  34.4%      1
+_k3                                                                6.8 µs   0.6%      1
+_route_prep                                                        1.2 µs   0.1%      1
+total                                                           1195.6 µs
+
+profile 2: bs=32 load=decode 32 sharding=ep8
+kernel                                                           GPU time  share  calls
+_k1                                                              512.0 µs  61.8%      1
+_k2                                                              308.4 µs  37.2%      1
+_k3                                                                6.9 µs   0.8%      1
+_route_prep                                                        1.2 µs   0.2%      1
+total                                                            828.6 µs
+
+profile 3: bs=8 load=verify 1 sharding=ep8
+kernel                                                           GPU time  share  calls
+_k1                                                              508.5 µs  66.7%      1
+_k2                                                              245.9 µs  32.3%      1
+_k3                                                                6.7 µs   0.9%      1
+_route_prep                                                        1.2 µs   0.2%      1
+total                                                            762.3 µs
+
+profile 4: bs=128 load=verify 16 sharding=ep8
+kernel                                                           GPU time  share  calls
+_k1                                                             1513.5 µs  62.0%      1
+_k2                                                              918.4 µs  37.6%      1
+_k3                                                                7.6 µs   0.3%      1
+_route_prep                                                        1.5 µs   0.1%      1
+total                                                           2441.0 µs
+
+profile 5: bs=256 load=verify 32 sharding=ep8
+kernel                                                           GPU time  share  calls
+_k1                                                             1838.9 µs  63.1%      1
+_k2                                                             1064.9 µs  36.5%      1
+_k3                                                                9.0 µs   0.3%      1
+_route_prep                                                        1.9 µs   0.1%      1
+total                                                           2914.7 µs
