@@ -177,6 +177,152 @@ def _k3(y_ptr, ids_ptr, gw_ptr, nw_ptr, out_ptr, start, count,
     tl.store(out_ptr + t * H + h, acc.to(out_ptr.dtype.element_ty))
 
 
+
+@triton.jit
+def _k1s(x_ptr, list_ptr, counts_ptr, wt_ptr, sft_ptr, lut_ptr, gs_ptr, hp_ptr,
+         M8, start, stride_l,
+         H: tl.constexpr, I: tl.constexpr, BR: tl.constexpr, KC: tl.constexpr,
+         CP: tl.constexpr, S: tl.constexpr):
+    """Split-K _k1 for few routes: block (e, jtile, s) computes its K-slice's partial
+    gate/up dots into hp[s, ent, 2I] (gate at columns [:I], up at [I:])."""
+    e = tl.program_id(0)
+    c = tl.load(counts_ptr + e)
+    if c == 0:
+        return
+    s = tl.program_id(2)
+    gid64 = (start + e).to(tl.int64)
+    gs = tl.load(gs_ptr + gid64)
+    wbase = gid64 * (H // 2) * (2 * I // 4)
+    sbase = gid64 * (H // 16) * (2 * I)
+    j4 = tl.program_id(1) * (BR // 4) + tl.arange(0, BR // 4)
+    jv = tl.reshape(4 * j4[:, None] + tl.arange(0, 4)[None, :], (BR,))
+    jm = jv < I
+    jm4 = (4 * j4) < I
+    KSLICE: tl.constexpr = H // S
+    for c0 in tl.range(0, c, CP):
+        pe = c0 + tl.arange(0, CP)
+        pv = pe < c
+        ent = tl.load(list_ptr + e * stride_l + pe, mask=pv, other=0)
+        tok = ent // 8
+        accg = tl.zeros((CP, BR), tl.float32)
+        accu = tl.zeros((CP, BR), tl.float32)
+        for kk in tl.range(0, KSLICE, KC):
+            k0 = s * KSLICE + kk
+            kb = k0 // 2 + tl.arange(0, KC // 2)
+            aev = tl.load(x_ptr + tok[:, None] * H + (2 * kb)[None, :],
+                          mask=pv[:, None], other=0.0)
+            aod = tl.load(x_ptr + tok[:, None] * H + (2 * kb + 1)[None, :],
+                          mask=pv[:, None], other=0.0)
+            bw = tl.load(wt_ptr + wbase + kb[:, None] * (2 * I // 4) + j4[None, :],
+                         mask=jm4[None, :], other=0)
+            bg = tl.reshape(_word_bytes(bw), (KC // 2, BR))
+            sc = tl.load(sft_ptr + sbase + (kb // 8)[:, None] * (2 * I) + jv[None, :],
+                         mask=jm[None, :], other=0.0).to(tl.float32) * gs
+            lw = tl.load(lut_ptr + bg)
+            wg_lo = ((lw & 0xFFFF).to(tl.uint16).to(tl.bfloat16, bitcast=True).to(tl.float32) * sc).to(aev.dtype)
+            wg_hi = ((lw >> 16).to(tl.uint16).to(tl.bfloat16, bitcast=True).to(tl.float32) * sc).to(aev.dtype)
+            bwu = tl.load(wt_ptr + wbase + kb[:, None] * (2 * I // 4) + (I // 4 + j4)[None, :],
+                          mask=jm4[None, :], other=0)
+            bu = tl.reshape(_word_bytes(bwu), (KC // 2, BR))
+            scu = tl.load(sft_ptr + sbase + (kb // 8)[:, None] * (2 * I) + (I + jv)[None, :],
+                          mask=jm[None, :], other=0.0).to(tl.float32) * gs
+            lwu = tl.load(lut_ptr + bu)
+            wu_lo = ((lwu & 0xFFFF).to(tl.uint16).to(tl.bfloat16, bitcast=True).to(tl.float32) * scu).to(aev.dtype)
+            wu_hi = ((lwu >> 16).to(tl.uint16).to(tl.bfloat16, bitcast=True).to(tl.float32) * scu).to(aev.dtype)
+            accg = tl.dot(aev, wg_lo, accg)
+            accg = tl.dot(aod, wg_hi, accg)
+            accu = tl.dot(aev, wu_lo, accu)
+            accu = tl.dot(aod, wu_hi, accu)
+        tl.store(hp_ptr + (s * M8 + ent)[:, None] * (2 * I) + jv[None, :],
+                 accg, mask=pv[:, None] & jm[None, :])
+        tl.store(hp_ptr + (s * M8 + ent)[:, None] * (2 * I) + (I + jv)[None, :],
+                 accu, mask=pv[:, None] & jm[None, :])
+
+
+@triton.jit
+def _k1b(hp_ptr, out_ptr, M8, I: tl.constexpr, S: tl.constexpr):
+    """Merge split-K partials + SwiGLU: inter[f] = silu(sum_s g_s) * (sum_s u_s)."""
+    f = tl.program_id(0)
+    i = tl.arange(0, I)
+    g = tl.zeros((I,), tl.float32)
+    u = tl.zeros((I,), tl.float32)
+    for s in tl.static_range(S):
+        g += tl.load(hp_ptr + (s * M8 + f) * (2 * I) + i)
+        u += tl.load(hp_ptr + (s * M8 + f) * (2 * I) + I + i)
+    inter = g * tl.sigmoid(g) * u
+    tl.store(out_ptr + f * I + i, inter.to(out_ptr.dtype.element_ty))
+
+
+@triton.jit
+def _k2s(in_ptr, list_ptr, counts_ptr, wt_ptr, sft_ptr, lut_ptr, gs_ptr, yp_ptr,
+         M8, start, stride_l,
+         H: tl.constexpr, I: tl.constexpr, BR: tl.constexpr, KC: tl.constexpr,
+         CP: tl.constexpr, S: tl.constexpr):
+    """Split-K _k2 for few routes: block (e, rtile, s) computes its I-slice partial
+    into yp[s, ent, H]. Same transposed-word layout as _k2."""
+    e = tl.program_id(0)
+    c = tl.load(counts_ptr + e)
+    if c == 0:
+        return
+    s = tl.program_id(2)
+    gid64 = (start + e).to(tl.int64)
+    gs = tl.load(gs_ptr + gid64)
+    wbase = gid64 * (I // 2) * (H // 4)
+    sbase = gid64 * (I // 16) * H
+    r4 = tl.program_id(1) * (BR // 4) + tl.arange(0, BR // 4)
+    rv = tl.reshape(4 * r4[:, None] + tl.arange(0, 4)[None, :], (BR,))
+    rm = rv < H
+    rm4 = (4 * r4) < H
+    KSLICE: tl.constexpr = I // S
+    for c0 in tl.range(0, c, CP):
+        pe = c0 + tl.arange(0, CP)
+        pv = pe < c
+        ent = tl.load(list_ptr + e * stride_l + pe, mask=pv, other=0)
+        acc = tl.zeros((CP, BR), tl.float32)
+        for kk in tl.range(0, KSLICE, KC):
+            k0 = s * KSLICE + kk
+            kb = k0 // 2 + tl.arange(0, KC // 2)
+            aev = tl.load(in_ptr + ent[:, None] * I + (2 * kb)[None, :],
+                          mask=pv[:, None], other=0.0)
+            aod = tl.load(in_ptr + ent[:, None] * I + (2 * kb + 1)[None, :],
+                          mask=pv[:, None], other=0.0)
+            bw = tl.load(wt_ptr + wbase + kb[:, None] * (H // 4) + r4[None, :],
+                         mask=rm4[None, :], other=0)
+            b = tl.reshape(_word_bytes(bw), (KC // 2, BR))
+            sc = tl.load(sft_ptr + sbase + (kb // 8)[:, None] * H + rv[None, :],
+                         mask=rm[None, :], other=0.0).to(tl.float32) * gs
+            lw = tl.load(lut_ptr + b)
+            w_lo = ((lw & 0xFFFF).to(tl.uint16).to(tl.bfloat16, bitcast=True).to(tl.float32) * sc).to(aev.dtype)
+            w_hi = ((lw >> 16).to(tl.uint16).to(tl.bfloat16, bitcast=True).to(tl.float32) * sc).to(aev.dtype)
+            acc = tl.dot(aev, w_lo, acc)
+            acc = tl.dot(aod, w_hi, acc)
+        tl.store(yp_ptr + (s * M8 + ent)[:, None] * H + rv[None, :],
+                 acc, mask=pv[:, None] & rm[None, :])
+
+
+@triton.jit
+def _k2b(yp_ptr, ids_ptr, gw_ptr, nw_ptr, out_ptr, start, count, M8,
+         H: tl.constexpr, S: tl.constexpr, EPS: tl.constexpr):
+    """Merge split-K y partials, then per-route RMSNorm(1+w) and weighted sum
+    (replaces _k3 on the split path)."""
+    t = tl.program_id(0)
+    h = tl.arange(0, H)
+    nw = tl.load(nw_ptr + h).to(tl.float32)
+    acc = tl.zeros((H,), tl.float32)
+    for k in tl.static_range(8):
+        f = t * 8 + k
+        idv = tl.load(ids_ptr + f)
+        lok = (idv >= start) & (idv < start + count)
+        yv = tl.zeros((H,), tl.float32)
+        for s in tl.static_range(S):
+            yv += tl.load(yp_ptr + (s * M8 + f) * H + h)
+        s2 = yv * (1.0 + nw)
+        ms = tl.sum(s2 * s2, 0) / H
+        gwk = tl.load(gw_ptr + f)
+        acc += tl.where((h < H) & lok, s2 * tl.rsqrt(ms + EPS) * gwk, 0.0)
+    tl.store(out_ptr + t * H + h, acc.to(out_ptr.dtype.element_ty))
+
+
 def prepare(weights):
     """Repack (same bytes): transpose packed weights to [K/2, rows] and view 4 bytes as
     int32 words along the row axis; scales stay fp8, transposed. Values unchanged."""
@@ -242,12 +388,26 @@ def kernel_fn(data, state):
     else:
         BR, KC, nw, ns = 64, 128, 8, 3
 
-    _k1[(count, triton.cdiv(I, BR))](x, list_ws, counts, state["w13T"], state["w13_sfT"],
-                                     state["lut"], state["w13_gs"], inter, M8, start, M8,
-                                     H=H, I=I, BR=BR, KC=KC, CP=CP, num_warps=nw, num_stages=ns)
-    _k2[(count, triton.cdiv(H, BR))](inter, list_ws, counts, state["w2T"], state["w2_sfT"],
-                                     state["lut"], state["w2_gs"], y, start, M8,
-                                     H=H, I=I, BR=BR, KC=KC, CP=CP, num_warps=nw, num_stages=ns)
+    if M <= 8:
+        S = 4
+        h_part = torch.empty((S, M8, 2 * I), dtype=torch.float32, device=dev)
+        y_part = torch.empty((S, M8, H), dtype=torch.float32, device=dev)
+        _k1s[(count, I // 32, S)](x, list_ws, counts, state["w13T"], state["w13_sfT"],
+                                  state["lut"], state["w13_gs"], h_part, M8, start, M8,
+                                  H=H, I=I, BR=32, KC=128, CP=CP, S=S, num_warps=8, num_stages=2)
+        _k1b[(M8,)](h_part, inter, M8, I=I, S=S, num_warps=8)
+        _k2s[(count, H // 32, S)](inter, list_ws, counts, state["w2T"], state["w2_sfT"],
+                                  state["lut"], state["w2_gs"], y_part, M8, start, M8,
+                                  H=H, I=I, BR=32, KC=128, CP=CP, S=S, num_warps=8, num_stages=2)
+        _k2b[(M,)](y_part, ids, gwt, state["post_norm_w"], out, start, count, M8,
+                   H=H, S=S, EPS=POST_NORM_EPS, num_warps=8)
+    else:
+        _k1[(count, triton.cdiv(I, BR))](x, list_ws, counts, state["w13T"], state["w13_sfT"],
+                                         state["lut"], state["w13_gs"], inter, M8, start, M8,
+                                         H=H, I=I, BR=BR, KC=KC, CP=CP, num_warps=nw, num_stages=ns)
+        _k2[(count, triton.cdiv(H, BR))](inter, list_ws, counts, state["w2T"], state["w2_sfT"],
+                                         state["lut"], state["w2_gs"], y, start, M8,
+                                         H=H, I=I, BR=BR, KC=KC, CP=CP, num_warps=nw, num_stages=ns)
     _k3[(M,)](y, ids, gwt, state["post_norm_w"], out, start, count,
               H=H, EPS=POST_NORM_EPS, num_warps=8)
     return out

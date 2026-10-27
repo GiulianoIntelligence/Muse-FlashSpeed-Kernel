@@ -20,7 +20,7 @@ from nvfp4 import dequantize, random_weights  # noqa: E402
 
 torch.manual_seed(0)
 
-H, I = 64, 128           # I%KC==0 required (no k-tail mask); I%BR!=0 exercises jm masks
+H, I = 128, 128          # H% (S*KC) constraints: split path needs KSLICE=H/S >= KC
 N_EXP = 16
 START, COUNT = 2, 4      # nonzero start exercises the gid = start + e mapping
 TOPK = 8
@@ -85,14 +85,28 @@ def run(M):
     y = torch.full((M8, H), float("nan"), dtype=torch.float32)
     out = torch.empty((M, H), dtype=torch.float32)
 
-    S._k1[(COUNT, triton.cdiv(I, BR1))](xf, list_ws, counts, state["w13T"], state["w13_sfT"],
-                                        state["lut"], state["w13_gs"], inter, M8, START, M8,
-                                        H=H, I=I, BR=BR1, KC=KC, CP=CP, num_warps=1)
-    S._k2[(COUNT, triton.cdiv(H, BR2))](inter, list_ws, counts, state["w2T"], state["w2_sfT"],
-                                        state["lut"], state["w2_gs"], y, START, M8,
-                                        H=H, I=I, BR=BR2, KC=KC, CP=CP, num_warps=1)
-    S._k3[(M,)](y, ids, gw, state["post_norm_w"], out, START, COUNT,
-                H=H, EPS=1e-8, num_warps=1)
+    if M <= 8:
+        SS = 4
+        hp = torch.full((SS, M8, 2 * I), float("nan"), dtype=torch.float32)
+        yp = torch.full((SS, M8, H), float("nan"), dtype=torch.float32)
+        S._k1s[(COUNT, I // 16, SS)](xf, list_ws, counts, state["w13T"], state["w13_sfT"],
+                                     state["lut"], state["w13_gs"], hp, M8, START, M8,
+                                     H=H, I=I, BR=16, KC=32, CP=CP, S=SS, num_warps=1)
+        S._k1b[(M8,)](hp, inter, M8, I=I, S=SS, num_warps=1)
+        S._k2s[(COUNT, H // 16, SS)](inter, list_ws, counts, state["w2T"], state["w2_sfT"],
+                                     state["lut"], state["w2_gs"], yp, M8, START, M8,
+                                     H=H, I=I, BR=16, KC=32, CP=CP, S=SS, num_warps=1)
+        S._k2b[(M,)](yp, ids, gw, state["post_norm_w"], out, START, COUNT, M8,
+                     H=H, S=SS, EPS=1e-8, num_warps=1)
+    else:
+        S._k1[(COUNT, triton.cdiv(I, BR1))](xf, list_ws, counts, state["w13T"], state["w13_sfT"],
+                                            state["lut"], state["w13_gs"], inter, M8, START, M8,
+                                            H=H, I=I, BR=BR1, KC=KC, CP=CP, num_warps=1)
+        S._k2[(COUNT, triton.cdiv(H, BR2))](inter, list_ws, counts, state["w2T"], state["w2_sfT"],
+                                            state["lut"], state["w2_gs"], y, START, M8,
+                                            H=H, I=I, BR=BR2, KC=KC, CP=CP, num_warps=1)
+        S._k3[(M,)](y, ids, gw, state["post_norm_w"], out, START, COUNT,
+                    H=H, EPS=1e-8, num_warps=1)
 
     for t in range(M):
         for k in range(TOPK):
@@ -107,6 +121,9 @@ def run(M):
             assert err < 1e-3, f"inter t={t} k={k} e={e}: rel err {err:.5f}"
     print(f"M={M}: inter OK")
 
+    print("  out finite:", bool(torch.isfinite(out).all()),
+          "| inter finite:", bool(torch.isfinite(inter).all()),
+          ("| yp finite-rows:" + str([[bool(torch.isfinite(yp[s, f]).all()) for f in range(M8)] for s in range(1)])) if M <= 8 else "")
     r = ref(x, ids, gw, weights)
     if counts.sum() == 0:
         assert torch.isfinite(out).all() and out.abs().max() == 0, \
