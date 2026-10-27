@@ -1,0 +1,119 @@
+okc run 2c94279cfae14e17 on muse_moe_w4a16
+submission  /workspace/Muse-FlashSpeed-Kernel/muse_moe_w4a16/submission.py
+status      ok
+passed      true
+speedup     0.006049397013781977
+speedup_ci  [0.005958656058575248 0.0061401379689887065]
+score_us    2.2231141334187677e+06
+tests       5/5 passed
+
+scored shapes (µs; speed of light is the reference's bound)
+case                                                         sglang      yours  speedup        sol  
+bs=1 load=decode 1 sharding=ep8                               77.41   35857.04   0.002x      11.42  
+bs=16 load=decode 16 sharding=ep8                            191.09   36897.19   0.005x      52.52  
+bs=32 load=decode 32 sharding=ep8                            202.56   36878.42   0.005x      70.76  
+bs=8 load=verify 1 sharding=ep8                              142.35   35901.35   0.004x      37.32  
+bs=128 load=verify 16 sharding=ep8                           468.40   37930.83   0.012x     101.34  
+bs=256 load=verify 32 sharding=ep8                           615.23   37746.50   0.016x     108.94  
+
+profile 0: bs=1 load=decode 1 sharding=ep8
+kernel                                                           GPU time  share  calls
+void at::native::index_elementwise_kernel<128, 4, at::nat...    7490.2 µs  20.2%     64
+void at::native::elementwise_kernel<128, 2, at::native::g...    5465.7 µs  14.7%    192
+void at::native::vectorized_elementwise_kernel<4, at::nat...    4987.1 µs  13.4%     64
+void at::native::unrolled_elementwise_kernel<at::native::...    3654.8 µs   9.8%     65
+void at::native::vectorized_elementwise_kernel<8, at::nat...    3204.9 µs   8.6%    256
+void at::native::vectorized_elementwise_kernel<4, at::nat...    3089.6 µs   8.3%     64
+void at::native::(anonymous namespace)::CatArrayBatchedCo...    3029.4 µs   8.2%     64
+void at::native::vectorized_elementwise_kernel<8, at::nat...    2318.6 µs   6.2%     97
+void at::native::vectorized_elementwise_kernel<8, at::nat...    1054.5 µs   2.8%     64
+void at::native::unrolled_elementwise_kernel<at::native::...     696.3 µs   1.9%    160
+nvjet_sm90_tst_64x8_64x16_2x1_v_bz_TNT                           667.0 µs   1.8%     32
+void at::native::vectorized_elementwise_kernel<8, at::nat...     560.4 µs   1.5%     64
+... 14 more
+total                                                          37107.5 µs
+
+profile 1: bs=16 load=decode 16 sharding=ep8
+kernel                                                           GPU time  share  calls
+void at::native::index_elementwise_kernel<128, 4, at::nat...    7486.5 µs  20.0%     64
+void at::native::elementwise_kernel<128, 2, at::native::g...    5532.7 µs  14.8%    224
+void at::native::vectorized_elementwise_kernel<4, at::nat...    4983.4 µs  13.3%     64
+void at::native::unrolled_elementwise_kernel<at::native::...    3650.5 µs   9.7%     65
+void at::native::vectorized_elementwise_kernel<8, at::nat...    3207.4 µs   8.6%    256
+void at::native::vectorized_elementwise_kernel<4, at::nat...    3088.6 µs   8.2%     64
+void at::native::(anonymous namespace)::CatArrayBatchedCo...    3030.3 µs   8.1%     64
+void at::native::vectorized_elementwise_kernel<8, at::nat...    2324.2 µs   6.2%     97
+void at::native::vectorized_elementwise_kernel<8, at::nat...    1053.0 µs   2.8%     64
+void at::native::unrolled_elementwise_kernel<at::native::...     716.8 µs   1.9%    160
+nvjet_sm90_tst_64x16_64x16_2x1_v_bz_TNT                          661.3 µs   1.8%     32
+void at::native::vectorized_elementwise_kernel<8, at::nat...     562.1 µs   1.5%     64
+... 13 more
+total                                                          37481.6 µs
+
+profile 2: bs=32 load=decode 32 sharding=ep8
+kernel                                                           GPU time  share  calls
+void at::native::index_elementwise_kernel<128, 4, at::nat...    7495.9 µs  20.0%     64
+void at::native::elementwise_kernel<128, 2, at::native::g...    5554.9 µs  14.8%    224
+void at::native::vectorized_elementwise_kernel<4, at::nat...    4991.3 µs  13.3%     64
+void at::native::unrolled_elementwise_kernel<at::native::...    3656.9 µs   9.7%     65
+void at::native::vectorized_elementwise_kernel<8, at::nat...    3202.7 µs   8.5%    256
+void at::native::vectorized_elementwise_kernel<4, at::nat...    3090.4 µs   8.2%     64
+void at::native::(anonymous namespace)::CatArrayBatchedCo...    3026.1 µs   8.1%     64
+void at::native::vectorized_elementwise_kernel<8, at::nat...    2320.7 µs   6.2%     97
+void at::native::vectorized_elementwise_kernel<8, at::nat...    1053.9 µs   2.8%     64
+void at::native::unrolled_elementwise_kernel<at::native::...     707.8 µs   1.9%    160
+nvjet_sm90_tst_64x32_64x16_2x1_v_bz_TNT                          669.7 µs   1.8%     32
+void at::native::vectorized_elementwise_kernel<8, at::nat...     561.9 µs   1.5%     64
+... 13 more
+total                                                          37563.8 µs
+
+profile 3: bs=8 load=verify 1 sharding=ep8
+kernel                                                           GPU time  share  calls
+void at::native::index_elementwise_kernel<128, 4, at::nat...    7488.3 µs  20.1%     64
+void at::native::elementwise_kernel<128, 2, at::native::g...    5530.2 µs  14.8%    224
+void at::native::vectorized_elementwise_kernel<4, at::nat...    4990.9 µs  13.4%     64
+void at::native::unrolled_elementwise_kernel<at::native::...    3653.4 µs   9.8%     65
+void at::native::vectorized_elementwise_kernel<8, at::nat...    3204.9 µs   8.6%    256
+void at::native::vectorized_elementwise_kernel<4, at::nat...    3090.4 µs   8.3%     64
+void at::native::(anonymous namespace)::CatArrayBatchedCo...    3026.9 µs   8.1%     64
+void at::native::vectorized_elementwise_kernel<8, at::nat...    2324.7 µs   6.2%     97
+void at::native::vectorized_elementwise_kernel<8, at::nat...    1055.7 µs   2.8%     64
+void at::native::unrolled_elementwise_kernel<at::native::...     710.3 µs   1.9%    160
+nvjet_sm90_tst_64x8_64x16_2x1_v_bz_TNT                           656.7 µs   1.8%     32
+void at::native::vectorized_elementwise_kernel<8, at::nat...     563.0 µs   1.5%     64
+... 13 more
+total                                                          37344.1 µs
+
+profile 4: bs=128 load=verify 16 sharding=ep8
+kernel                                                           GPU time  share  calls
+void at::native::index_elementwise_kernel<128, 4, at::nat...    7494.0 µs  19.8%     64
+void at::native::elementwise_kernel<128, 2, at::native::g...    5663.0 µs  14.9%    224
+void at::native::vectorized_elementwise_kernel<4, at::nat...    4984.8 µs  13.2%     64
+void at::native::unrolled_elementwise_kernel<at::native::...    3669.0 µs   9.7%     65
+void at::native::vectorized_elementwise_kernel<8, at::nat...    3189.9 µs   8.4%    256
+void at::native::vectorized_elementwise_kernel<4, at::nat...    3081.1 µs   8.1%     64
+void at::native::(anonymous namespace)::CatArrayBatchedCo...    3003.5 µs   7.9%     64
+void at::native::vectorized_elementwise_kernel<8, at::nat...    2330.9 µs   6.2%     97
+void at::native::vectorized_elementwise_kernel<8, at::nat...    1064.5 µs   2.8%     64
+void at::native::unrolled_elementwise_kernel<at::native::...     733.2 µs   1.9%    160
+nvjet_sm90_tst_128x64_64x8_1x2_h_bz_TNT                          728.1 µs   1.9%     32
+void at::native::vectorized_elementwise_kernel<8, at::nat...     562.6 µs   1.5%     64
+... 12 more
+total                                                          37883.3 µs
+
+profile 5: bs=256 load=verify 32 sharding=ep8
+kernel                                                           GPU time  share  calls
+void at::native::index_elementwise_kernel<128, 4, at::nat...    7494.3 µs  19.5%     64
+void at::native::elementwise_kernel<128, 2, at::native::g...    5774.8 µs  15.0%    224
+void at::native::vectorized_elementwise_kernel<4, at::nat...    4979.4 µs  13.0%     64
+void at::native::unrolled_elementwise_kernel<at::native::...    3657.5 µs   9.5%     65
+void at::native::vectorized_elementwise_kernel<8, at::nat...    3196.4 µs   8.3%    256
+void at::native::vectorized_elementwise_kernel<4, at::nat...    3077.1 µs   8.0%     64
+void at::native::(anonymous namespace)::CatArrayBatchedCo...    3017.7 µs   7.9%     64
+void at::native::vectorized_elementwise_kernel<8, at::nat...    2360.6 µs   6.1%     97
+void at::native::vectorized_elementwise_kernel<8, at::nat...    1053.3 µs   2.7%     64
+nvjet_sm90_tst_128x128_64x6_2x1_v_bz_TNT                         865.9 µs   2.3%     32
+void at::native::unrolled_elementwise_kernel<at::native::...     788.6 µs   2.1%    160
+void at::native::vectorized_elementwise_kernel<8, at::nat...     563.2 µs   1.5%     64
+... 12 more
+total                                                          38423.5 µs
