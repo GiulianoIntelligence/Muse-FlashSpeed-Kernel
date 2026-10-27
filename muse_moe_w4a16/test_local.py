@@ -85,21 +85,12 @@ def run(M):
     y = torch.full((M8, H), float("nan"), dtype=torch.float32)
     out = torch.empty((M, H), dtype=torch.float32)
 
-    if M <= 8:
-        RPAD = min(max(triton.next_power_of_2(M), 1), 8)
-        S._gv1[(COUNT, I // 16)](xf, list_ws, counts, state["w13T"], state["w13_sfT"],
-                                 state["w13_gs"], inter, M8, START, M8,
-                                 H=H, I=I, RP=16, KC=KC, RPAD=RPAD, num_warps=1)
-        S._gv2[(COUNT, H // 16)](inter, list_ws, counts, state["w2T"], state["w2_sfT"],
-                                 state["w2_gs"], y, START, M8,
-                                 H=H, I=I, RP=16, KC=KC, RPAD=RPAD, num_warps=1)
-    else:
-        S._k1[(COUNT, triton.cdiv(I, BR1))](xf, list_ws, counts, state["w13T"], state["w13_sfT"],
-                                            state["w13_gs"], inter, M8, START, M8,
-                                            H=H, I=I, BR=BR1, KC=KC, CP=CP, num_warps=1)
-        S._k2[(COUNT, triton.cdiv(H, BR2))](inter, list_ws, counts, state["w2T"], state["w2_sfT"],
-                                            state["w2_gs"], y, START, M8,
-                                            H=H, I=I, BR=BR2, KC=KC, CP=CP, num_warps=1)
+    S._k1[(COUNT, triton.cdiv(I, BR1))](xf, list_ws, counts, state["w13T"], state["w13_sfT"],
+                                        state["lut"], state["w13_gs"], inter, M8, START, M8,
+                                        H=H, I=I, BR=BR1, KC=KC, CP=CP, num_warps=1)
+    S._k2[(COUNT, triton.cdiv(H, BR2))](inter, list_ws, counts, state["w2T"], state["w2_sfT"],
+                                        state["lut"], state["w2_gs"], y, START, M8,
+                                        H=H, I=I, BR=BR2, KC=KC, CP=CP, num_warps=1)
     S._k3[(M,)](y, ids, gw, state["post_norm_w"], out, START, COUNT,
                 H=H, EPS=1e-8, num_warps=1)
 
