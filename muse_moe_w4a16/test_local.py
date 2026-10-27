@@ -20,11 +20,11 @@ from nvfp4 import dequantize, random_weights  # noqa: E402
 
 torch.manual_seed(0)
 
-H, I = 64, 96            # I%KC==0 required (no k-tail mask); I%BR!=0 exercises jm masks
+H, I = 64, 128           # I%KC==0 required (no k-tail mask); I%BR!=0 exercises jm masks
 N_EXP = 16
 START, COUNT = 2, 4      # nonzero start exercises the gid = start + e mapping
 TOPK = 8
-BR1, BR2, KC = 64, 16, 32
+BR1, BR2, KC = 32, 16, 64
 
 
 def make_case(M):
