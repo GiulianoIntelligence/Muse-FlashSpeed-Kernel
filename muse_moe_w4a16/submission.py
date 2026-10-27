@@ -195,10 +195,10 @@ def kernel_fn(data, state):
 
     _k1[(count, triton.cdiv(I, 64))](x, list_ws, counts, state["w13T"], state["w13_sfT"],
                                      state["w13_gs"], inter, M8, start, M8,
-                                     H=H, I=I, BR=64, KC=128, CP=CP, num_warps=8, num_stages=1)
+                                     H=H, I=I, BR=64, KC=128, CP=CP, num_warps=8, num_stages=2)
     _k2[(count, triton.cdiv(H, 64))](inter, list_ws, counts, state["w2T"], state["w2_sfT"],
                                      state["w2_gs"], y, start, M8,
-                                     H=H, I=I, BR=64, KC=128, CP=CP, num_warps=8, num_stages=1)
+                                     H=H, I=I, BR=64, KC=128, CP=CP, num_warps=8, num_stages=2)
     _k3[(M,)](y, ids, gwt, state["post_norm_w"], out, start, count,
               H=H, EPS=POST_NORM_EPS, num_warps=8)
     return out
