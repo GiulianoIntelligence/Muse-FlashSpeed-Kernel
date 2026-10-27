@@ -38,4 +38,27 @@ Submit only when a check clearly beats our current best.
 |---|---|---|---|---|
 | moe_w4a16 | starter (naive PyTorch, dequant per call) | passed 5/5 tests | 0.006× | baseline sanity ✓ |
 | moe_w4a16 | v1: 4-kernel Triton (route prep, GEMM1+SwiGLU, GEMM2, norm+weighted-sum), expert-major, dequant in-kernel, only touched experts | FAILED tests bs=4/33: rel L2 1.413 ≈ √2 → output decorrelated with ref (job 58a260bf05454c17) | — | reverted; root cause: E2M1 code-3 decoded as 2.0 instead of 1.5 (1/16 of weights wrong) + likely tl.trans/interleave lowering; v2 removed trans/interleave entirely |
-| moe_w4a16 | v2: prepare() transposed NVFP4 repack → B-operand loads [K,N] native; even/odd x split (no interleave); dtype-generic kernels validated exact in TRITON_INTERPRET | PASSED 5/5 (rel L2 4.8e-3, job bda09d374198440f). Per shape µs ours vs sol: 396/11.4, 997/52.5, 1304/70.8, 776/37.3, 2492/101, 2908/109 → 0.188× (k1+k2 ≈ 5% of peak BW; num_stages=1 latency-bound) | 0.188× | kept (first correct kernel); next: num_stages=2 |
+| moe_w4a16 | v2: prepare() transposed NVFP4 repack → B-operand loads [K,N] native; even/odd x split (no interleave); dtype-generic kernels validated exact in TRITON_INTERPRET | PASSED 5/5 (rel L2 4.8e-3, job bda09d374198440f). Per shape µs ours vs sol: 396/11.4, 997/52.5, 1304/70.8, 776/37.3, 2492/101, 2908/109 → 0.188× (k1+k2 ≈ 5% of peak BW; num_stages=1 latency-bound) | 0.188× | kept — SUBMITTED as first board entry (job 2cf4389f24844cd2, 0.188×) |
+| moe_w4a16 | num_stages 1→2 (pipelined k-chunk loads) | passed; AOT showed pipeliner NOT engaging on v2 (identical PTX) | 0.185× | reverted (noise, slightly worse) |
+| moe_w4a16 | v3: word-packed u32 weight loads (4× fewer load inst), sf tile broadcast, no trans/interleave; pipeliner engaged (AOT: shared 24KB, PTX changes) | passed; decode1 396→255µs (0.30×) BUT all M≥16 shapes regressed ~1.5× (broadcast_to+reshape goes through smem+barriers ×4/chunk) | 0.154× | reverted (keep ideas) |
+| moe_w4a16 | v4: v3 + dot-free GEMV path (mul+sum, no mma layout conv) for M≤8 | passed; decode1 238µs (0.325×, best) but verify1 (M=8) 700→1350µs (RPAD=8 3-D products too heavy) | 0.140× | reverted; gv only viable for M≤2 |
+| moe_w4a16 | v5: row-major word layout (DRAM-friendly 2048B rows), weights as dot A-operand | passed; ALL shapes worse (decode1 406µs, verify1 4067µs) | 0.100× | reverted — transposed layout was fine; DRAM-locality hypothesis DEAD |
+| moe_w4a16 | v6: v3 + 256-entry LUT dequant (byte→2×bf16 bitcast) + per-element sf gather (no smem reshape) | passed; decode1 289µs, verify32 3712→4229?? no: 3087(v2)→4229 — LUT ≈ neutral overall | 0.155× | reverted (LUT idea kept for later) |
+
+## Insights (read before next attempt)
+
+1. All 6 kernel structures land at ~250-700GB/s effective (5-15% of H200 peak). NOT load-width, NOT DRAM layout, NOT dot-vs-mulsum alone.
+2. v2→v3 regression isolated the sf `broadcast_to+reshape` (smem round trip + barriers ×4/chunk) as a real cost; v6's per-element L1 gather avoids it.
+3. e2m1 where-chain ≈ 12-24 ALU ops/byte is significant; LUT gather ≈ 9 — helps decode, neutral elsewhere.
+4. Per-chunk constant cost ~2-4µs/block regardless of size — suspect dot smem-staging barriers (num_warps=8) OR pipelining not covering the register-computed operand path. UNRESOLVED — needs targeted probe.
+5. Interpreter (TRITON_INTERPRET=1, fp32 buffers, dtype-generic kernels) + AOT sm90 PTX inspection (triton.compile with GPUTarget, no GPU needed) = free local validation; caught E2M1 code-3 bug and join-order semantics.
+6. tl.join(join(a,b),join(c,d)) flattens (a,c,b,d) — nesting must be join(join(a,c),join(b,d)) for (a,b,c,d).
+7. Configs: BR=32/KC=128/warps=8/stages=2 current best for dot path; large-M needs the x-re-read + mma count addressed (fused lo+hi dot, CP=128 padding waste).
+
+## Next ideas (priority order)
+
+- Config sweep per shape via shape-branch (BR, KC, warps, stages) — cheap, several combos per check.
+- Fuse _k3 into _k2 epilogue (saves ~6µs/call + y_ws round trip — matters at decode1's 11µs floor).
+- Split-K across blocks for decode1 (only ~333 active blocks; need 1000+ for latency hiding).
+- Env-gated cuda-event timing inside eager test phase to attribute the per-chunk constant cost on real GPU.
+- Bigger redesign (day-scale): CUDA load_inline Marlin-style kernel (cp.async + ldmatrix + hand dequant) for the hot path.
