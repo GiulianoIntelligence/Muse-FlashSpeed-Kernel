@@ -45,6 +45,9 @@ Submit only when a check clearly beats our current best.
 | moe_w4a16 | v5: row-major word layout (DRAM-friendly 2048B rows), weights as dot A-operand | passed; ALL shapes worse (decode1 406µs, verify1 4067µs) | 0.100× | reverted — transposed layout was fine; DRAM-locality hypothesis DEAD |
 | moe_w4a16 | v6: v3 + 256-entry LUT dequant (byte→2×bf16 bitcast) + per-element sf gather (no smem reshape) | passed; decode1 289µs, verify32 3712→4229?? no: 3087(v2)→4229 — LUT ≈ neutral overall | 0.155× | reverted (LUT idea kept for later) |
 
+| moe_w4a16 | split-K (S=4) for M<=8 + fused norm in k2 merge kernel | FAILED on judge (bs=4 rel 1.000 = out exactly 0; bs=1 ~1.3-1.5) despite exact interpreter validation AND on-GPU debug showing split-out ≈ full-out (maxdiff 0.004) | — | reverted & PARKED; needs GPU-level debugging (ncu); suspicion: harness capture/replay interaction — out matched the full path yet the check failed; stages=1/warps=4 bisect ruled out the pipeliner |
+| moe_w4a16 | sweep 1-4: per-M config table (BR/KC/warps/stages, one combo per scored shape per check) | sweep2 0.213x, sweep3 0.228x, sweep4 pinned winners → SUBMITTED 0.2376x (job ae3ea7bcafd8407e) | 0.238× | KEPT — board best. Winners: M=1 (32,128,8,4); M≤8 (32,128,4,3); M≤16 (64,128,8,3); M≤40 (64,64,8,4); M≤128 (64,128,8,4); M>128 (64,128,8,3) |
+
 ## Insights (read before next attempt)
 
 1. All 6 kernel structures land at ~250-700GB/s effective (5-15% of H200 peak). NOT load-width, NOT DRAM layout, NOT dot-vs-mulsum alone.
