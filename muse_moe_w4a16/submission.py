@@ -230,17 +230,17 @@ def kernel_fn(data, state):
 
     # per-shape config sweep (one combo per scored M-group)
     if M == 1:
-        BR, KC, nw, ns = 16, 256, 4, 2
+        BR, KC, nw, ns = 32, 128, 8, 3
     elif M <= 8:
-        BR, KC, nw, ns = 32, 128, 4, 2
+        BR, KC, nw, ns = 64, 64, 4, 2
     elif M <= 16:
-        BR, KC, nw, ns = 64, 64, 8, 2
+        BR, KC, nw, ns = 64, 128, 8, 2
     elif M <= 40:
-        BR, KC, nw, ns = 32, 128, 8, 4
+        BR, KC, nw, ns = 64, 64, 8, 4
     elif M <= 128:
-        BR, KC, nw, ns = 64, 64, 8, 3
+        BR, KC, nw, ns = 64, 64, 8, 4
     else:
-        BR, KC, nw, ns = 64, 64, 8, 2
+        BR, KC, nw, ns = 64, 64, 8, 3
 
     _k1[(count, triton.cdiv(I, BR))](x, list_ws, counts, state["w13T"], state["w13_sfT"],
                                      state["lut"], state["w13_gs"], inter, M8, start, M8,
