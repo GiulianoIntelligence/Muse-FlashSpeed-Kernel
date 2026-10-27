@@ -37,4 +37,4 @@ Submit only when a check clearly beats our current best.
 | Problem | Idea | Check result | Speedup | Status |
 |---|---|---|---|---|
 | moe_w4a16 | starter (naive PyTorch, dequant per call) | passed 5/5 tests | 0.006× | baseline sanity ✓ |
-| moe_w4a16 | v1: 4-kernel Triton (route prep, GEMM1+SwiGLU, GEMM2, norm+weighted-sum), expert-major, dequant in-kernel, only touched experts | pending | — | — |
+| moe_w4a16 | v1: 4-kernel Triton (route prep, GEMM1+SwiGLU, GEMM2, norm+weighted-sum), expert-major, dequant in-kernel, only touched experts | FAILED tests bs=4/33: rel L2 1.413 ≈ √2 → output decorrelated with ref (job 58a260bf05454c17) | — | reverted; suspects: tl.interleave nibble order, tl.trans+dot on computed tile, routing list, fp8 scale convert; debugging locally via TRITON_INTERPRET=1 (free) before next check |
